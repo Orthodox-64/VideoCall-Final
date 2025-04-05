@@ -18,20 +18,15 @@ export function getUrlParams(url = window.location.href) {
   return new URLSearchParams(urlStr);
 }
 
-export default function App() {
+export default function VideoCall() {
   const roomID = getUrlParams().get("roomID") || randomID(5);
 
   const myMeeting = async (element) => {
     if (!element) return;
 
-    // Fetch environment variables correctly
-    const appID = parseInt(import.meta.env.VITE_APP_ID, 10);;
-    const serverSecret =import.meta.env.VITE_SERVER_SECRET;
-
-    if (!appID || !serverSecret) {
-      console.error("Missing environment variables. Check your .env file.");
-      return;
-    }
+    // ZegoCloud credentials
+    const appID = 42129068;
+    const serverSecret = "63aaa5d4225aff1bb35ec9e92c20a0c8";
 
     // Generate a unique user ID and name
     const userID = randomID(8);
@@ -39,7 +34,7 @@ export default function App() {
 
     // Generate Kit Token
     const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
-      parseInt(appID), // Convert to number if necessary
+      appID,
       serverSecret,
       roomID,
       userID,
@@ -64,6 +59,9 @@ export default function App() {
         ],
         scenario: {
           mode: ZegoUIKitPrebuilt.GroupCall, // Use OneONoneCall for 1-on-1 calls
+        },
+        voiceEffect: {
+          noiseSuppression: true,
         },
       });
     } catch (error) {
