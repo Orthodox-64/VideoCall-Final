@@ -25,8 +25,8 @@ export default function VideoCall() {
     if (!element) return;
 
     // ZegoCloud credentials
-    const appID = 887625032;
-    const serverSecret = "43a5ba20886abdf53b5e84ecaa436ecc";
+    const appID = 82721077;
+    const serverSecret = "6250ee6a210c4e8a2847932ebe295ca7";
 
     // Generate a unique user ID and name
     const userID = randomID(8);
