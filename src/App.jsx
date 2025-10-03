@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ZegoUIKitPrebuilt } from "@zegocloud/zego-uikit-prebuilt";
+import { ZIM } from "zego-zim-web";
 
 function randomID(len = 5) {
   let result = "";
@@ -55,16 +56,16 @@ export default function App() {
       // Add to local state
       setUploadedFiles(prev => [...prev, fileData]);
 
-      // Send to all participants using the correct method
+      // Send to all participants using ZIM custom command
       if (zpInstanceRef.current) {
-        const message = JSON.stringify({
+        const message = {
           type: 'file',
           fileData: fileData
-        });
+        };
         
         try {
-          // FIXED: Use sendBroadcastMessage instead of sendRoomMessage
-          await zpInstanceRef.current.sendBroadcastMessage(message);
+          await zpInstanceRef.current.sendInRoomCustomCommand(message);
+          console.log("File sent successfully:", fileData.name);
         } catch (error) {
           console.error("Error sending file:", error);
         }
@@ -104,19 +105,19 @@ export default function App() {
         try {
           const translation = await translateText(transcript, targetLanguage);
           
-          // Send translation to all participants via ZegoCloud
+          // Send translation to all participants via ZegoCloud ZIM
           if (zpInstanceRef.current) {
-            const message = JSON.stringify({
+            const message = {
               type: 'translation',
               original: transcript,
               translated: translation,
               language: targetLanguage,
               timestamp: new Date().toISOString()
-            });
+            };
             
             try {
-              // FIXED: Use sendBroadcastMessage instead of sendRoomMessage
-              await zpInstanceRef.current.sendBroadcastMessage(message);
+              await zpInstanceRef.current.sendInRoomCustomCommand(message);
+              console.log("Translation sent:", translation);
               // Also add to local captions
               addCaption("You", translation);
             } catch (error) {
@@ -184,6 +185,10 @@ export default function App() {
       userName
     );
     const zp = ZegoUIKitPrebuilt.create(kitToken);
+    
+    // Add ZIM plugin for custom messaging
+    zp.addPlugins({ ZIM });
+    
     zpInstanceRef.current = zp;
 
     const meetingURL = `${window.location.protocol}//${window.location.hostname}:${window.location.port}${window.location.pathname}?roomID=${roomID}`;
@@ -197,25 +202,36 @@ export default function App() {
         showPreJoinView: false,
         turnOnCameraWhenJoining: true,
         turnOnMicrophoneWhenJoining: true,
-        // FIXED: Changed from onRoomMessageReceived to onInRoomMessageReceived
-        onInRoomMessageReceived: (messageList) => {
-          // Handle incoming messages from other participants
-          messageList.forEach(msg => {
+        onInRoomCustomCommandReceived: (messages) => {
+          // Handle incoming custom command messages from other participants
+          console.log("Received custom commands:", messages);
+          messages.forEach(msg => {
             try {
-              const data = JSON.parse(msg.message);
+              // The message might be a string or object
+              const data = typeof msg.msg === 'string' ? JSON.parse(msg.msg) : msg.msg;
+              console.log("Parsed message data:", data);
+              
               if (data.type === 'translation') {
-                addCaption(msg.fromUser.userName, data.translated);
+                addCaption(msg.fromUser?.userName || "Other User", data.translated);
               } else if (data.type === 'file') {
-                setUploadedFiles(prev => [...prev, data.fileData]);
+                console.log("Received file:", data.fileData.name);
+                setUploadedFiles(prev => {
+                  // Check if file already exists to avoid duplicates
+                  const exists = prev.some(f => f.timestamp === data.fileData.timestamp);
+                  if (!exists) {
+                    return [...prev, data.fileData];
+                  }
+                  return prev;
+                });
               }
             } catch (e) {
-              console.log("Non-JSON message received:", msg.message);
+              console.log("Error parsing message:", e, msg);
             }
           });
         }
       });
 
-      console.log("Successfully joined room");
+      console.log("Successfully joined room with ZIM enabled");
     } catch (error) {
       console.error("Failed to join the room:", error);
     }
@@ -230,12 +246,12 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", width: "100vw", height: "100vh" }}>
-      {/* Video call container - KEPT AS IS */}
+      {/* Video call container */}
       <div style={{ flex: 1, position: "relative" }}>
         <div ref={myMeeting} style={{ width: "100%", height: "100%" }}></div>
       </div>
 
-      {/* Translation sidebar - KEPT AS IS */}
+      {/* Translation sidebar */}
       <div
         style={{
           width: "400px",
@@ -528,7 +544,7 @@ export default function App() {
   );
 }
 
-// Translation function using Google Translate (MyMemory API - free, no key needed)
+// Translation function using MyMemory API (free, no key needed)
 async function translateText(text, targetLang) {
   try {
     const langCode = targetLang.split('-')[0];
