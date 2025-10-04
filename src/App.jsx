@@ -4,8 +4,7 @@ import { ZIM } from "zego-zim-web";
 
 function randomID(len = 5) {
   let result = "";
-  const chars =
-    "12345qwertyuiopasdfgh67890jklmnbvcxzMNBVCZXASDQWERTYHGFUIOLKJP";
+  const chars = "12345qwertyuiopasdfgh67890jklmnbvcxzMNBVCZXASDQWERTYHGFUIOLKJP";
   for (let i = 0; i < len; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
@@ -28,11 +27,12 @@ export default function App() {
   const zpInstanceRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
   const roomID = getUrlParams().get("roomID") || randomID(5);
+  const userID = React.useRef(randomID(8)).current;
+  const userName = React.useRef("User-" + userID).current;
 
-  // Auto-scroll to bottom when new captions arrive
   React.useEffect(() => {
     captionsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [captions]);
+  }, [captions, uploadedFiles]);
 
   const addCaption = (username, translated) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -43,6 +43,11 @@ export default function App() {
     const file = event.target.files[0];
     if (!file) return;
 
+    if (file.size > 2 * 1024 * 1024) {
+      addCaption("System", "File too large. Maximum size is 2MB");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (e) => {
       const fileData = {
@@ -50,17 +55,20 @@ export default function App() {
         type: file.type,
         size: file.size,
         data: e.target.result,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        uploadedBy: "You"
       };
 
-      // Add to local state
       setUploadedFiles(prev => [...prev, fileData]);
+      addCaption("System", `File "${file.name}" uploaded`);
 
-      // Send to all participants using ZIM custom command
       if (zpInstanceRef.current) {
         const message = {
           type: 'file',
-          fileData: fileData
+          fileData: {
+            ...fileData,
+            uploadedBy: userName
+          }
         };
         
         try {
@@ -71,7 +79,13 @@ export default function App() {
         }
       }
     };
+    
+    reader.onerror = () => {
+      addCaption("System", "Failed to read file");
+    };
+    
     reader.readAsDataURL(file);
+    event.target.value = '';
   };
 
   const startListening = () => {
@@ -104,8 +118,8 @@ export default function App() {
         
         try {
           const translation = await translateText(transcript, targetLanguage);
+          addCaption("You", translation);
           
-          // Send translation to all participants via ZegoCloud ZIM
           if (zpInstanceRef.current) {
             const message = {
               type: 'translation',
@@ -118,12 +132,8 @@ export default function App() {
             try {
               await zpInstanceRef.current.sendInRoomCustomCommand(message);
               console.log("Translation sent:", translation);
-              // Also add to local captions
-              addCaption("You", translation);
             } catch (error) {
               console.error("Error sending message:", error);
-              // Still show locally even if send fails
-              addCaption("You", translation);
             }
           }
         } catch (error) {
@@ -141,7 +151,6 @@ export default function App() {
     };
 
     recognition.onend = () => {
-      console.log("Speech recognition ended");
       if (isListening && recognitionRef.current) {
         setTimeout(() => {
           try {
@@ -174,9 +183,6 @@ export default function App() {
     const appID = 82721077;
     const serverSecret = "6250ee6a210c4e8a2847932ebe295ca7";
 
-    const userID = randomID(8);
-    const userName = "User-" + userID;
-
     const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
       appID,
       serverSecret,
@@ -184,30 +190,26 @@ export default function App() {
       userID,
       userName
     );
+    
     const zp = ZegoUIKitPrebuilt.create(kitToken);
-    
-    // Add ZIM plugin for custom messaging
     zp.addPlugins({ ZIM });
-    
     zpInstanceRef.current = zp;
 
-    const meetingURL = `${window.location.protocol}//${window.location.hostname}:${window.location.port}${window.location.pathname}?roomID=${roomID}`;
+    const meetingURL = `${window.location.protocol}//${window.location.host}${window.location.pathname}?roomID=${roomID}`;
 
     try {
       await zp.joinRoom({
         container: element,
-        sharedLinks: [{ name: "Personal link", url: meetingURL }],
+        sharedLinks: [{ name: "Share Link", url: meetingURL }],
         scenario: { mode: ZegoUIKitPrebuilt.GroupCall },
         voiceEffect: { noiseSuppression: true },
         showPreJoinView: false,
         turnOnCameraWhenJoining: true,
         turnOnMicrophoneWhenJoining: true,
         onInRoomCustomCommandReceived: (messages) => {
-          // Handle incoming custom command messages from other participants
           console.log("Received custom commands:", messages);
           messages.forEach(msg => {
             try {
-              // The message might be a string or object
               const data = typeof msg.msg === 'string' ? JSON.parse(msg.msg) : msg.msg;
               console.log("Parsed message data:", data);
               
@@ -216,9 +218,12 @@ export default function App() {
               } else if (data.type === 'file') {
                 console.log("Received file:", data.fileData.name);
                 setUploadedFiles(prev => {
-                  // Check if file already exists to avoid duplicates
-                  const exists = prev.some(f => f.timestamp === data.fileData.timestamp);
+                  const exists = prev.some(f => 
+                    f.timestamp === data.fileData.timestamp && 
+                    f.name === data.fileData.name
+                  );
                   if (!exists) {
+                    addCaption("System", `File "${data.fileData.name}" received from ${data.fileData.uploadedBy}`);
                     return [...prev, data.fileData];
                   }
                   return prev;
@@ -237,7 +242,6 @@ export default function App() {
     }
   };
 
-  // Cleanup on unmount
   React.useEffect(() => {
     return () => {
       stopListening();
@@ -246,34 +250,25 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", width: "100vw", height: "100vh" }}>
-      {/* Video call container */}
       <div style={{ flex: 1, position: "relative" }}>
         <div ref={myMeeting} style={{ width: "100%", height: "100%" }}></div>
       </div>
 
-      {/* Translation sidebar */}
-      <div
-        style={{
-          width: "400px",
-          backgroundColor: "#1a1a1a",
-          color: "white",
-          display: "flex",
-          flexDirection: "column",
-          borderLeft: "2px solid #333",
-        }}
-      >
-        {/* Header */}
-        <div
-          style={{
-            padding: "20px",
-            backgroundColor: "#252525",
-            borderBottom: "2px solid #333",
-          }}
-        >
+      <div style={{
+        width: "400px",
+        backgroundColor: "#1a1a1a",
+        color: "white",
+        display: "flex",
+        flexDirection: "column",
+        borderLeft: "2px solid #333",
+      }}>
+        <div style={{
+          padding: "20px",
+          backgroundColor: "#252525",
+          borderBottom: "2px solid #333",
+        }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "15px" }}>
-            <h2 style={{ margin: 0, fontSize: "20px" }}>
-              Live Translation
-            </h2>
+            <h2 style={{ margin: 0, fontSize: "20px" }}>Live Translation</h2>
             {isListening && (
               <div style={{
                 width: "8px",
@@ -286,9 +281,7 @@ export default function App() {
           </div>
           
           <div style={{ marginBottom: "15px" }}>
-            <label style={{ fontSize: "14px", marginRight: "10px" }}>
-              Translate to:
-            </label>
+            <label style={{ fontSize: "14px", marginRight: "10px" }}>Translate to:</label>
             <select
               value={targetLanguage}
               onChange={(e) => setTargetLanguage(e.target.value)}
@@ -329,7 +322,6 @@ export default function App() {
             </select>
           </div>
 
-          {/* Control Button */}
           <button
             onClick={isListening ? stopListening : startListening}
             style={{
@@ -349,12 +341,6 @@ export default function App() {
               gap: "8px",
               marginBottom: "10px"
             }}
-            onMouseEnter={(e) => {
-              e.target.style.backgroundColor = isListening ? "#ff2222" : "#3a8eef";
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.backgroundColor = isListening ? "#ff4444" : "#4a9eff";
-            }}
           >
             {isListening ? (
               <>
@@ -369,7 +355,6 @@ export default function App() {
             )}
           </button>
 
-          {/* File Upload Button */}
           <input
             ref={fileInputRef}
             type="file"
@@ -395,12 +380,6 @@ export default function App() {
               justifyContent: "center",
               gap: "8px"
             }}
-            onMouseEnter={(e) => {
-              e.target.style.backgroundColor = "#4a9eff22";
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.backgroundColor = "transparent";
-            }}
           >
             <span style={{ fontSize: "20px" }}>+</span>
             Upload File
@@ -420,18 +399,14 @@ export default function App() {
           )}
         </div>
 
-        {/* Captions and Files list */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "20px",
-          }}
-        >
-          {/* Uploaded Files */}
+        <div style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "20px",
+        }}>
           {uploadedFiles.map((file, idx) => (
             <div
-              key={`file-${idx}`}
+              key={`file-${idx}-${file.timestamp}`}
               style={{
                 marginBottom: "15px",
                 padding: "12px",
@@ -451,7 +426,7 @@ export default function App() {
                     {file.name}
                   </div>
                   <div style={{ fontSize: "11px", color: "#888" }}>
-                    {(file.size / 1024).toFixed(2)} KB
+                    {(file.size / 1024).toFixed(2)} KB • {file.uploadedBy}
                   </div>
                 </div>
                 <a
@@ -473,16 +448,13 @@ export default function App() {
             </div>
           ))}
 
-          {/* Captions */}
           {captions.length === 0 && uploadedFiles.length === 0 ? (
-            <div
-              style={{
-                textAlign: "center",
-                color: "#666",
-                marginTop: "50px",
-                fontSize: "14px",
-              }}
-            >
+            <div style={{
+              textAlign: "center",
+              color: "#666",
+              marginTop: "50px",
+              fontSize: "14px",
+            }}>
               {isListening ? "Listening for speech..." : "Click 'Start Listening' to begin"}
             </div>
           ) : (
@@ -497,16 +469,14 @@ export default function App() {
                   borderLeft: "3px solid #4a9eff",
                 }}
               >
-                <div
-                  style={{
-                    fontSize: "11px",
-                    color: "#888",
-                    marginBottom: "8px",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
-                  }}
-                >
+                <div style={{
+                  fontSize: "11px",
+                  color: "#888",
+                  marginBottom: "8px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center"
+                }}>
                   <span>{caption.timestamp}</span>
                   <span style={{ 
                     backgroundColor: "#4a9eff33",
@@ -518,13 +488,11 @@ export default function App() {
                     {caption.username}
                   </span>
                 </div>
-                <div
-                  style={{
-                    fontSize: "15px",
-                    color: "#fff",
-                    lineHeight: "1.5"
-                  }}
-                >
+                <div style={{
+                  fontSize: "15px",
+                  color: "#fff",
+                  lineHeight: "1.5"
+                }}>
                   {caption.translated}
                 </div>
               </div>
@@ -544,21 +512,16 @@ export default function App() {
   );
 }
 
-// Translation function using MyMemory API (free, no key needed)
 async function translateText(text, targetLang) {
   try {
     const langCode = targetLang.split('-')[0];
-    
     const response = await fetch(
       `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${langCode}`
     );
-    
     const data = await response.json();
-    
     if (data.responseStatus === 200 && data.responseData) {
       return data.responseData.translatedText;
     }
-    
     return "Translation unavailable";
   } catch (error) {
     console.error("Translation error:", error);
